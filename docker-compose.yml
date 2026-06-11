@@ -1,0 +1,24 @@
+services:
+  fastcrm:
+    build: .
+    ports:
+      - "5006:5006"
+    environment:
+      FASTCRM_DB: /data/fastcrm.sqlite
+      FASTCRM_PORT: "5006"
+      # Provide via a .env file in this directory (compose auto-loads it) or
+      # uncomment and set here. Slash-commands work without a key.
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-xai}
+      MODEL_NAME: ${MODEL_NAME:-grok-4-1-fast-reasoning}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      FASTCRM_ADMIN_EMAIL: ${FASTCRM_ADMIN_EMAIL:-admin@fastcrm.example}
+      FASTCRM_ADMIN_PASSWORD: ${FASTCRM_ADMIN_PASSWORD:-FastCRM2026$$}
+      FASTCRM_SECRET: ${FASTCRM_SECRET:-}
+    volumes:
+      - fastcrm-data:/data
+
+volumes:
+  fastcrm-data:
