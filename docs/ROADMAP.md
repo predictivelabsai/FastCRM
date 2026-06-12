@@ -21,6 +21,8 @@ Upstream analysed: `frappe/crm` (`crm/fcrm/doctype/*`), ~40 doctypes.
 | Call logs | `CRM Call Log` | `call_logs` (synthetic) |
 | Lead sources / industries / territories | `CRM Lead Source`, `CRM Industry`, `CRM Territory` | vocabularies in `db.py` |
 | Dashboard / KPIs | `CRM Dashboard` | KPI cards + pipeline funnel |
+| **Saved / custom views** | `CRM View Settings` | named lead filters (status/source/owner/sort) as chips |
+| **Email composer** | `CRM Communication` | compose-email card on deals & leads → logs to timeline |
 | **AI assistant over CRM data** | *(not in upstream)* | new — grounded multi-provider chat |
 
 ## Near-term roadmap 🔜
@@ -30,11 +32,13 @@ Features present upstream and worth adding to the demonstrator next:
 1. ✅ **Write operations & inline editing** (done) — upstream is fully CRUD; FastCRM was
    read-only over synthetic data. Add HTMX-driven create/edit for leads, deals,
    tasks, notes (stage drag-and-drop on the Kanban via `hx-post`).
-2. **Custom & saved views** — `CRM View Settings` lets users define filtered,
-   sorted, column-pick list/kanban views. Add per-user saved filters.
-3. **Email & communication** — upstream threads email against leads/deals
-   (`CRM Communication Status`, Email Account integration). Add an email
-   composer + threaded comms timeline (Postmark/SMTP).
+2. ✅ **Custom & saved views** (done) — the leads list has a filter toolbar
+   (status, source, owner, search, sort); the current filter set can be saved as
+   a named view and re-applied or deleted from a chip bar (`saved_views` table).
+   Column-pick and kanban views are still to come.
+3. ✅ **Email composer** (done) — a compose-email card on both deal and lead
+   detail (To / Subject / Body) records an `email` activity on the timeline
+   (`db.log_email`). Real SMTP send + inbound threading remains out of scope.
 4. **SLA tracking** — `CRM Service Level Agreement` / `…Priority` /
    `…Rolling Response Time` drive first-response/resolution timers. Add response
    SLAs with a "due / breached" indicator.

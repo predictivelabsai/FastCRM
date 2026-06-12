@@ -165,6 +165,14 @@ def post(session, deal_id: int, title: str = "", priority: str = "Medium"):
     return _frag(session, deal_id)
 
 
+@rt("/deals/{deal_id}/email")
+def post(session, deal_id: int, to: str = "", subject: str = "", body: str = ""):
+    if not _user(session):
+        return Response("Unauthorized", status_code=401)
+    db.log_email("deal", deal_id, to, subject, body)
+    return _frag(session, deal_id)
+
+
 @rt("/tasks/{task_id}/status")
 def post(session, task_id: int, status: str = ""):
     t = db.one("SELECT ref_type, ref_id FROM tasks WHERE id=?", (task_id,))
@@ -175,8 +183,10 @@ def post(session, task_id: int, status: str = ""):
 
 
 @rt("/leads")
-def get(session, status: str = "All", q: str = ""):
-    return _guard(session, "leads", lambda: views.leads_list(status, q))
+def get(session, status: str = "All", q: str = "", source: str = "All",
+        owner_id: str = "All", sort: str = "newest", view: int = 0):
+    return _guard(session, "leads",
+                  lambda: views.leads_list(status, q, source, owner_id, sort, view))
 
 
 @rt("/leads/new")
@@ -194,6 +204,35 @@ def post(session, first_name: str = "", last_name: str = "", organization: str =
     lid = db.create_lead(first_name.strip(), last_name.strip(), organization.strip(),
                          email.strip(), source, est_value=est_value)
     return RedirectResponse(f"/leads/{lid}", status_code=303)
+
+
+# --- saved views (defined before /leads/{lead_id} so they aren't shadowed) ---
+
+@rt("/leads/views/save")
+def post(session, name: str = "", status: str = "All", source: str = "All",
+         owner_id: str = "All", q: str = "", sort: str = "newest"):
+    if not _user(session):
+        return RedirectResponse("/login", status_code=303)
+    vid = db.create_saved_view(name, "leads", {
+        "status": status, "source": source, "owner_id": owner_id, "q": q, "sort": sort})
+    return RedirectResponse(f"/leads?view={vid}" if vid else "/leads", status_code=303)
+
+
+@rt("/leads/views/{vid}/delete")
+def post(session, vid: int):
+    if not _user(session):
+        return Response("Unauthorized", status_code=401)
+    db.delete_saved_view(vid)
+    # return the refreshed chip bar (outerHTML swap on #sv-bar)
+    return views._saved_view_chips("leads") or Div(id="sv-bar")
+
+
+@rt("/leads/{lead_id}/email")
+def post(session, lead_id: int, to: str = "", subject: str = "", body: str = ""):
+    if not _user(session):
+        return Response("Unauthorized", status_code=401)
+    db.log_email("lead", lead_id, to, subject, body)
+    return Response(headers={"HX-Redirect": f"/leads/{lead_id}"})
 
 
 @rt("/leads/{lead_id}")

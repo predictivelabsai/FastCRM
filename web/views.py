@@ -228,10 +228,32 @@ def deal_main(deal_id: int):
                      **{"hx-post": f"/deals/{deal_id}/note", "hx-target": "#deal-main", "hx-swap": "innerHTML"},
                      cls="inline-form", style="margin-bottom:12px;")
 
+    composer = _email_composer("deal", deal_id, default_to=d["c_email"] or "",
+                               default_subject=f"Re: {d['org_name']} — {money(d['deal_value'])} opportunity")
+
     return Div(
-        Div(info, Div(Div(H3("Tasks"), cls="card-header"), task_tbl, add_task, cls="card")),
+        Div(info, Div(Div(H3("Tasks"), cls="card-header"), task_tbl, add_task, cls="card"), composer),
         Div(contact, Div(Div(H3("Activity"), cls="card-header"), note_form, timeline, cls="card")),
         cls="detail-grid")
+
+
+def _email_composer(ref_type, ref_id, default_to="", default_subject="", target="#deal-main"):
+    """A compose-email card that logs an 'email' activity to the timeline."""
+    return Div(
+        Div(H3("✉ Compose email"), cls="card-header"),
+        Form(
+            Input(name="to", type="email", value=default_to, placeholder="To (email)", required=True,
+                  style="width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;"),
+            Input(name="subject", value=default_subject, placeholder="Subject",
+                  style="width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;"),
+            Textarea(placeholder="Write your message…", name="body", rows="4",
+                     style="width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;font-family:inherit;"),
+            Div(Button("Send & log", cls="btn sm primary", type="submit"),
+                Span("Logged to the activity timeline (demo — no mail is sent).",
+                     style="color:var(--text-mute);font-size:11.5px;margin-left:8px;"),
+                style="display:flex;align-items:center;"),
+            **{"hx-post": f"/{ref_type}s/{ref_id}/email", "hx-target": target, "hx-swap": "innerHTML"}),
+        cls="card")
 
 
 def deal_detail(deal_id: int):
@@ -247,22 +269,64 @@ def deal_detail(deal_id: int):
 
 # ---------- leads -----------------------------------------------------------
 
-def leads_list(status: str = "All", q: str = ""):
+LEAD_SORTS = {"newest": "l.created DESC", "oldest": "l.created ASC",
+              "value": "l.annual_revenue DESC", "name": "l.last_name ASC"}
+
+
+def _saved_view_chips(entity, active_id=None):
+    """Render saved-view chips with a delete (✕) on each."""
+    views = db.list_saved_views(entity)
+    if not views:
+        return None
+    chips = []
+    for v in views:
+        is_active = active_id == v["id"]
+        chips.append(Span(
+            A(f"★ {v['name']}", href=f"/{entity}?view={v['id']}",
+              cls="sv-chip-link" + (" active" if is_active else "")),
+            A("✕", href="#", title="Delete view", cls="sv-chip-del",
+              **{"hx-post": f"/{entity}/views/{v['id']}/delete", "hx-target": "#sv-bar",
+                 "hx-swap": "outerHTML", "hx-confirm": f"Delete saved view “{v['name']}”?"}),
+            cls="sv-chip"))
+    return Div(Span("Saved views:", cls="sv-label"), *chips, cls="sv-bar", id="sv-bar")
+
+
+def leads_list(status: str = "All", q: str = "", source: str = "All",
+               owner_id: str = "All", sort: str = "newest", view: int = 0):
+    # A saved view overrides the individual filter params.
+    active_view = None
+    if view:
+        active_view = db.saved_view(view)
+        if active_view:
+            f = active_view["filters_dict"]
+            status = f.get("status", "All")
+            q = f.get("q", "")
+            source = f.get("source", "All")
+            owner_id = str(f.get("owner_id", "All"))
+            sort = f.get("sort", "newest")
+
     seg = Div(*[A(s, href=f"/leads?status={s}",
                   cls="" + ("active" if status == s else ""))
                 for s in ["All"] + db.LEAD_STATUSES], cls="seg")
 
     where, params = [], []
     if status != "All":
-        where.append("status=?")
+        where.append("l.status=?")
         params.append(status)
+    if source != "All":
+        where.append("l.source=?")
+        params.append(source)
+    if owner_id not in ("All", "", None):
+        where.append("l.owner_id=?")
+        params.append(int(owner_id))
     if q:
-        where.append("(first_name LIKE ? OR last_name LIKE ? OR organization LIKE ? OR email LIKE ?)")
+        where.append("(l.first_name LIKE ? OR l.last_name LIKE ? OR l.organization LIKE ? OR l.email LIKE ?)")
         params += [f"%{q}%"] * 4
     clause = ("WHERE " + " AND ".join(where)) if where else ""
+    order = LEAD_SORTS.get(sort, LEAD_SORTS["newest"])
     leads = db.rows(
         f"""SELECT l.*, u.name owner FROM leads l LEFT JOIN users u ON u.id=l.owner_id
-            {clause} ORDER BY l.created DESC LIMIT 200""", tuple(params))
+            {clause} ORDER BY {order} LIMIT 200""", tuple(params))
 
     tbl = Table(
         Thead(Tr(Th("Name"), Th("Organization"), Th("Status"), Th("Source"),
@@ -277,13 +341,41 @@ def leads_list(status: str = "All", q: str = ""):
             Td(l["created"][:10], style="color:var(--text-mute);"),
         ) for l in leads] or [Tr(Td("No leads match.", colspan="7"))]), cls="tbl")
 
-    search = Form(
+    # filter toolbar (GET) — status comes from the segmented control above
+    owner_opts = [Option("All owners", value="All", selected=(str(owner_id) == "All"))] + [
+        Option(u["name"], value=str(u["id"]), selected=(str(owner_id) == str(u["id"]))) for u in db.users()]
+    source_opts = [Option("All sources", value="All", selected=(source == "All"))] + [
+        Option(s, value=s, selected=(source == s)) for s in db.LEAD_SOURCES]
+    sort_opts = [Option({"newest": "Newest", "oldest": "Oldest", "value": "Value ↓", "name": "Name A–Z"}[k],
+                        value=k, selected=(sort == k)) for k in LEAD_SORTS]
+
+    filter_bar = Form(
         Input(type="search", name="q", value=q, placeholder="Search leads…"),
+        Select(*source_opts, name="source", cls="filter-select"),
+        Select(*owner_opts, name="owner_id", cls="filter-select"),
+        Select(*sort_opts, name="sort", cls="filter-select"),
         Input(type="hidden", name="status", value=status),
+        Button("Apply", cls="btn sm", type="submit"),
         cls="toolbar", method="get", action="/leads")
 
-    return (_title("Leads", f"{len(leads)} shown", A("＋ New lead", href="/leads/new", cls="btn primary")),
-            seg, search, Div(tbl, cls="card"))
+    # save-current-view control
+    save_form = Form(
+        Input(name="name", placeholder="Name this view…", required=True, style="width:170px;"),
+        Input(type="hidden", name="status", value=status),
+        Input(type="hidden", name="source", value=source),
+        Input(type="hidden", name="owner_id", value=str(owner_id)),
+        Input(type="hidden", name="q", value=q),
+        Input(type="hidden", name="sort", value=sort),
+        Button("★ Save view", cls="btn sm primary", type="submit"),
+        method="post", action="/leads/views/save",
+        cls="inline-form", style="margin-left:auto;")
+
+    sub = f"{len(leads)} shown" + (f" · view: {active_view['name']}" if active_view else "")
+    return (_title("Leads", sub, A("＋ New lead", href="/leads/new", cls="btn primary")),
+            seg,
+            (_saved_view_chips("leads", active_view["id"] if active_view else None) or Div(id="sv-bar")),
+            Div(filter_bar, save_form, style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;"),
+            Div(tbl, cls="card"))
 
 
 def lead_detail(lead_id: int):
@@ -309,10 +401,13 @@ def lead_detail(lead_id: int):
         Div(Span(a["kind"], cls="kind"), " ", Span(a["created"][:16], cls="when")),
         Div(NotStr(a["body"] or "")),
     ) for a in acts] or [Li("No activity yet.")], cls="timeline")
+    composer = _email_composer("lead", lead_id, default_to=l["email"] or "",
+                               default_subject=f"Following up — {l['organization'] or 'your enquiry'}",
+                               target="this")
     return (
         _title(_person(l["first_name"], l["last_name"]),
                f"Lead #{l['id']}", A("← All leads", href="/leads", cls="btn")),
-        Div(info, Div(Div(H3("Activity"), cls="card-header"), timeline, cls="card"),
+        Div(info, Div(Div(Div(H3("Activity"), cls="card-header"), timeline, cls="card"), composer),
             cls="detail-grid"),
     )
 

@@ -77,7 +77,8 @@ def build():
     db.init_schema()
     with db.cursor() as conn:
         for t in ("activities", "call_logs", "tasks", "notes", "deals",
-                  "leads", "contacts", "organizations", "users", "chat_messages"):
+                  "leads", "contacts", "organizations", "users", "chat_messages",
+                  "saved_views"):
             conn.execute(f"DELETE FROM {t}")
 
     # --- users (sales reps) -------------------------------------------------

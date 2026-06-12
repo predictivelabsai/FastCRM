@@ -151,6 +151,15 @@ table.tbl tr:hover td{background:var(--surface-2);}
 .inline-form{display:flex;gap:8px;align-items:center;}
 .inline-form input,.inline-form select{padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;}
 .mini-select{padding:3px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--surface);}
+.filter-select{padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--surface);}
+.sv-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
+.sv-label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-mute);font-weight:600;}
+.sv-chip{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;overflow:hidden;background:var(--surface);}
+.sv-chip-link{padding:4px 10px;font-size:12.5px;color:var(--text-dim);}
+.sv-chip-link:hover{background:var(--surface-2);text-decoration:none;}
+.sv-chip-link.active{background:var(--accent);color:#fff;}
+.sv-chip-del{padding:4px 8px;font-size:11px;color:var(--text-mute);border-left:1px solid var(--border);}
+.sv-chip-del:hover{background:var(--danger,#dc2626);color:#fff;text-decoration:none;}
 
 /* login */
 .login-wrap{height:100vh;display:flex;align-items:center;justify-content:center;

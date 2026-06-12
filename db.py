@@ -10,6 +10,7 @@ The database path is resolved from ``FASTCRM_DB`` (env) or defaults to
 """
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -51,9 +52,10 @@ ACTIVITY_TYPES = ["note", "call", "email", "status", "task"]
 # --- connection -------------------------------------------------------------
 
 def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
@@ -207,6 +209,14 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     thread_id     TEXT NOT NULL,
     role          TEXT NOT NULL,
     content       TEXT NOT NULL,
+    created       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS saved_views (
+    id            INTEGER PRIMARY KEY,
+    name          TEXT NOT NULL,
+    entity        TEXT NOT NULL,   -- 'leads' | 'deals'
+    filters       TEXT NOT NULL,   -- JSON: {status, source, owner_id, q, sort}
     created       TEXT NOT NULL
 );
 
@@ -419,3 +429,64 @@ def create_deal(org_id, deal_value, stage="Qualification", next_step="", contact
 
 def organizations() -> list[dict]:
     return rows("SELECT id, name FROM organizations ORDER BY name")
+
+
+def users() -> list[dict]:
+    return rows("SELECT id, name, email FROM users ORDER BY name")
+
+
+# --- email composer (logs to the activity timeline) -------------------------
+
+def log_email(ref_type: str, ref_id: int, to: str, subject: str, body: str) -> bool:
+    to = (to or "").strip()
+    subject = (subject or "").strip() or "(no subject)"
+    if not to:
+        return False
+    import html as _html
+    preview = _html.escape((body or "").strip())
+    if len(preview) > 240:
+        preview = preview[:240] + "…"
+    formatted = (f"📧 Email to <strong>{_html.escape(to)}</strong> — "
+                 f"<strong>{_html.escape(subject)}</strong>"
+                 + (f"<br><span style='color:var(--text-mute)'>{preview}</span>" if preview else ""))
+    log_activity(ref_type, ref_id, "email", formatted)
+    return True
+
+
+# --- saved / custom views ---------------------------------------------------
+
+def list_saved_views(entity: str) -> list[dict]:
+    out = rows("SELECT * FROM saved_views WHERE entity=? ORDER BY name", (entity,))
+    for v in out:
+        try:
+            v["filters_dict"] = json.loads(v["filters"])
+        except (ValueError, TypeError):
+            v["filters_dict"] = {}
+    return out
+
+
+def saved_view(view_id: int) -> dict | None:
+    v = one("SELECT * FROM saved_views WHERE id=?", (view_id,))
+    if v:
+        try:
+            v["filters_dict"] = json.loads(v["filters"])
+        except (ValueError, TypeError):
+            v["filters_dict"] = {}
+    return v
+
+
+def create_saved_view(name: str, entity: str, filters: dict) -> int | None:
+    name = (name or "").strip()
+    if not name or entity not in ("leads", "deals"):
+        return None
+    clean = {k: v for k, v in (filters or {}).items() if v not in (None, "", "All")}
+    with cursor() as conn:
+        conn.execute("INSERT INTO saved_views(name,entity,filters,created) VALUES (?,?,?,datetime('now'))",
+                     (name, entity, json.dumps(clean)))
+        return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+def delete_saved_view(view_id: int) -> bool:
+    with cursor() as conn:
+        conn.execute("DELETE FROM saved_views WHERE id=?", (view_id,))
+    return True
