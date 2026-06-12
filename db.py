@@ -317,3 +317,105 @@ def tasks_for(ref_type: str, ref_id: int) -> list[dict]:
            ORDER BY (t.status IN ('Done','Canceled')), t.due_date""",
         (ref_type, ref_id),
     )
+
+
+# --- write operations (transactional) ---------------------------------------
+
+def log_activity(ref_type: str, ref_id: int, kind: str, body: str, owner_id=None):
+    with cursor() as conn:
+        if owner_id is None:
+            r = conn.execute("SELECT id FROM users LIMIT 1").fetchone()
+            owner_id = r[0] if r else None
+        conn.execute(
+            "INSERT INTO activities(ref_type,ref_id,kind,body,owner_id,created) "
+            "VALUES (?,?,?,?,?,datetime('now'))",
+            (ref_type, ref_id, kind, body, owner_id))
+
+
+def set_deal_stage(deal_id: int, stage: str) -> bool:
+    if stage not in DEAL_STAGES:
+        return False
+    cur = deal(deal_id)
+    if not cur or cur["stage"] == stage:
+        return False
+    prob = {"Qualification": 20, "Demo/Making": 35, "Proposal/Quotation": 55,
+            "Negotiation": 70, "Ready to Close": 90, "Won": 100, "Lost": 0}.get(stage, cur["probability"])
+    closed = "date('now')" if stage in ("Won", "Lost") else "NULL"
+    with cursor() as conn:
+        conn.execute(
+            f"UPDATE deals SET stage=?, probability=?, last_activity=datetime('now'), "
+            f"closed_date={closed} WHERE id=?", (stage, prob, deal_id))
+    log_activity("deal", deal_id, "status", f"Stage moved from <strong>{cur['stage']}</strong> to <strong>{stage}</strong>.")
+    return True
+
+
+def update_deal(deal_id: int, deal_value=None, next_step=None, expected_close=None):
+    sets, params = [], []
+    if deal_value is not None:
+        sets.append("deal_value=?"); params.append(deal_value)
+    if next_step is not None:
+        sets.append("next_step=?"); params.append(next_step)
+    if expected_close is not None:
+        sets.append("expected_close=?"); params.append(expected_close)
+    if not sets:
+        return
+    sets.append("last_activity=datetime('now')")
+    params.append(deal_id)
+    with cursor() as conn:
+        conn.execute(f"UPDATE deals SET {', '.join(sets)} WHERE id=?", tuple(params))
+
+
+def add_task(ref_type: str, ref_id: int, title: str, priority="Medium", due_date=None):
+    with cursor() as conn:
+        owner = conn.execute("SELECT id FROM users LIMIT 1").fetchone()
+        conn.execute(
+            "INSERT INTO tasks(title,priority,status,due_date,assignee_id,ref_type,ref_id,description,created) "
+            "VALUES (?,?,?,?,?,?,?,?,datetime('now'))",
+            (title, priority if priority in TASK_PRIORITIES else "Medium", "Todo",
+             due_date, owner[0] if owner else None, ref_type, ref_id, ""))
+    log_activity(ref_type, ref_id, "task", f"Task added: <strong>{title}</strong>.")
+
+
+def set_task_status(task_id: int, status: str):
+    if status not in TASK_STATUSES:
+        return
+    with cursor() as conn:
+        conn.execute("UPDATE tasks SET status=? WHERE id=?", (status, task_id))
+
+
+def create_lead(first_name, last_name, organization, email, source, status="New", est_value=0):
+    with cursor() as conn:
+        owner = conn.execute("SELECT id FROM users ORDER BY RANDOM() LIMIT 1").fetchone()
+        conn.execute(
+            """INSERT INTO leads(first_name,last_name,organization,email,status,source,
+               annual_revenue,owner_id,converted,created,last_activity)
+               VALUES (?,?,?,?,?,?,?,?,0,datetime('now'),datetime('now'))""",
+            (first_name, last_name, organization, email,
+             status if status in LEAD_STATUSES else "New",
+             source if source in LEAD_SOURCES else "Website",
+             est_value or 0, owner[0] if owner else None))
+        return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+def create_deal(org_id, deal_value, stage="Qualification", next_step="", contact_id=None):
+    prob = {"Qualification": 20, "Demo/Making": 35, "Proposal/Quotation": 55,
+            "Negotiation": 70, "Ready to Close": 90, "Won": 100, "Lost": 0}.get(stage, 20)
+    with cursor() as conn:
+        owner = conn.execute("SELECT id FROM users ORDER BY RANDOM() LIMIT 1").fetchone()
+        if contact_id is None:
+            c = conn.execute("SELECT id FROM contacts WHERE org_id=? LIMIT 1", (org_id,)).fetchone()
+            contact_id = c[0] if c else None
+        conn.execute(
+            """INSERT INTO deals(org_id,contact_id,owner_id,stage,deal_value,probability,
+               source,next_step,expected_close,created,last_activity)
+               VALUES (?,?,?,?,?,?,?,?,date('now','+30 day'),datetime('now'),datetime('now'))""",
+            (org_id, contact_id, owner[0] if owner else None,
+             stage if stage in DEAL_STAGES else "Qualification",
+             deal_value or 0, prob, "Website", next_step))
+        did = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    log_activity("deal", did, "note", "Deal created.")
+    return did
+
+
+def organizations() -> list[dict]:
+    return rows("SELECT id, name FROM organizations ORDER BY name")

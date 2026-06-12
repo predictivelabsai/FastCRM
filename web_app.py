@@ -114,14 +114,86 @@ def get(session):
     return _guard(session, "deals", views.deals_kanban)
 
 
+@rt("/deals/new")
+def get(session):
+    return _guard(session, "deals", views.new_deal_form)
+
+
+@rt("/deals/new")
+def post(session, org_id: int = 0, deal_value: float = 0, stage: str = "Qualification", next_step: str = ""):
+    if not _user(session):
+        return RedirectResponse("/login", status_code=303)
+    did = db.create_deal(org_id, deal_value, stage, next_step)
+    return RedirectResponse(f"/deals/{did}", status_code=303)
+
+
 @rt("/deals/{deal_id}")
 def get(session, deal_id: int):
     return _guard(session, "deals", lambda: views.deal_detail(deal_id))
 
 
+def _frag(session, deal_id):
+    """Return the deal-main fragment (HTMX) if authed."""
+    if not _user(session):
+        return Response("Unauthorized", status_code=401)
+    return views.deal_main(deal_id)
+
+
+@rt("/deals/{deal_id}/stage")
+def post(session, deal_id: int, stage: str = ""):
+    db.set_deal_stage(deal_id, stage)
+    return _frag(session, deal_id)
+
+
+@rt("/deals/{deal_id}/edit")
+def post(session, deal_id: int, deal_value: float = None, next_step: str = ""):
+    db.update_deal(deal_id, deal_value=deal_value, next_step=next_step)
+    return _frag(session, deal_id)
+
+
+@rt("/deals/{deal_id}/note")
+def post(session, deal_id: int, body: str = ""):
+    if body.strip():
+        db.log_activity("deal", deal_id, "note", body.strip())
+    return _frag(session, deal_id)
+
+
+@rt("/deals/{deal_id}/task")
+def post(session, deal_id: int, title: str = "", priority: str = "Medium"):
+    if title.strip():
+        db.add_task("deal", deal_id, title.strip(), priority)
+    return _frag(session, deal_id)
+
+
+@rt("/tasks/{task_id}/status")
+def post(session, task_id: int, status: str = ""):
+    t = db.one("SELECT ref_type, ref_id FROM tasks WHERE id=?", (task_id,))
+    db.set_task_status(task_id, status)
+    if t and t["ref_type"] == "deal":
+        return _frag(session, t["ref_id"])
+    return Response("ok")
+
+
 @rt("/leads")
 def get(session, status: str = "All", q: str = ""):
     return _guard(session, "leads", lambda: views.leads_list(status, q))
+
+
+@rt("/leads/new")
+def get(session):
+    return _guard(session, "leads", views.new_lead_form)
+
+
+@rt("/leads/new")
+def post(session, first_name: str = "", last_name: str = "", organization: str = "",
+         email: str = "", source: str = "Website", est_value: float = 0):
+    if not _user(session):
+        return RedirectResponse("/login", status_code=303)
+    if not first_name.strip():
+        return RedirectResponse("/leads/new", status_code=303)
+    lid = db.create_lead(first_name.strip(), last_name.strip(), organization.strip(),
+                         email.strip(), source, est_value=est_value)
+    return RedirectResponse(f"/leads/{lid}", status_code=303)
 
 
 @rt("/leads/{lead_id}")

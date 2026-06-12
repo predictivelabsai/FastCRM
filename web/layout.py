@@ -144,6 +144,13 @@ table.tbl tr:hover td{background:var(--surface-2);}
 .btn.primary:hover{background:var(--accent-hover);}
 .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;}
 .toolbar input[type=search]{padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;min-width:240px;}
+.btn.sm{padding:4px 9px;font-size:12px;}
+.stage-mover{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;}
+.stage-mover .btn.sm{font-size:11px;padding:4px 8px;}
+.stage-mover .btn.sm:disabled{opacity:1;cursor:default;}
+.inline-form{display:flex;gap:8px;align-items:center;}
+.inline-form input,.inline-form select{padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;}
+.mini-select{padding:3px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--surface);}
 
 /* login */
 .login-wrap{height:100vh;display:flex;align-items:center;justify-content:center;

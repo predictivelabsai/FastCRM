@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fasthtml.common import (
     Div, H1, H2, H3, P, Span, A, Table, Thead, Tbody, Tr, Th, Td,
-    Ul, Li, Strong, NotStr, Form, Input,
+    Ul, Li, Strong, NotStr, Form, Input, Button, Textarea, Select, Option,
 )
 
 import db
@@ -106,29 +106,92 @@ def deals_kanban():
                 Span(f"{len(deals)} · {money(total)}", cls="cnt"), cls="kan-head"),
             Div(*cards, cls="kan-body"), cls="kan-col"))
     return (
-        _title("Deals", "Drag-free Kanban across the sales pipeline — click a card to open it."),
+        _title("Deals", "Move deals through the pipeline — open a card to advance it.",
+               A("＋ New deal", href="/deals/new", cls="btn primary")),
         Div(*cols, cls="kanban"),
     )
 
 
-def deal_detail(deal_id: int):
+def new_deal_form():
+    orgs = db.organizations()
+    return (_title("New deal", "Create a deal in the pipeline.", A("← Deals", href="/deals", cls="btn")),
+            Div(Form(
+                Span("Organization", style="font-size:11px;text-transform:uppercase;color:var(--text-mute);font-weight:600;"),
+                Select(*[Option(o["name"], value=str(o["id"])) for o in orgs], name="org_id",
+                       style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;margin:4px 0 10px;"),
+                Span("Deal value (£)", style="font-size:11px;text-transform:uppercase;color:var(--text-mute);font-weight:600;"),
+                Input(type="number", name="deal_value", value="10000", step="500",
+                      style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;margin:4px 0 10px;"),
+                Span("Stage", style="font-size:11px;text-transform:uppercase;color:var(--text-mute);font-weight:600;"),
+                Select(*[Option(s, value=s) for s in db.OPEN_STAGES], name="stage",
+                       style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;margin:4px 0 10px;"),
+                Span("Next step", style="font-size:11px;text-transform:uppercase;color:var(--text-mute);font-weight:600;"),
+                Input(name="next_step", placeholder="e.g. Send proposal",
+                      style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;margin:4px 0 12px;"),
+                Div(Button("Create deal", cls="btn primary", type="submit"),
+                    A("Cancel", href="/deals", cls="btn"), style="display:flex;gap:8px;"),
+                method="post", action="/deals/new"),
+                cls="card", style="max-width:480px;"))
+
+
+def new_lead_form():
+    return (_title("New lead", "Add a lead to the funnel.", A("← Leads", href="/leads", cls="btn")),
+            Div(Form(
+                Div(Input(name="first_name", placeholder="First name", required=True, style="flex:1;"),
+                    Input(name="last_name", placeholder="Last name", style="flex:1;"),
+                    style="display:flex;gap:8px;margin-bottom:10px;"),
+                Input(name="organization", placeholder="Organization",
+                      style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;margin-bottom:10px;"),
+                Input(name="email", type="email", placeholder="Email",
+                      style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;margin-bottom:10px;"),
+                Div(Select(*[Option(s, value=s) for s in db.LEAD_SOURCES], name="source", style="flex:1;padding:9px;border:1px solid var(--border);border-radius:8px;"),
+                    Input(type="number", name="est_value", placeholder="Est. value £", style="flex:1;padding:9px;border:1px solid var(--border);border-radius:8px;"),
+                    style="display:flex;gap:8px;margin-bottom:12px;"),
+                Div(Button("Create lead", cls="btn primary", type="submit"),
+                    A("Cancel", href="/leads", cls="btn"), style="display:flex;gap:8px;"),
+                method="post", action="/leads/new"),
+                cls="card", style="max-width:480px;"))
+
+
+def _stage_mover(deal_id, current):
+    """Buttons to move a deal through the pipeline (HTMX, swaps #deal-main)."""
+    btns = []
+    for s in db.DEAL_STAGES:
+        active = s == current
+        btns.append(Button(
+            s, cls="btn sm" + (" primary" if active else ""),
+            disabled=active,
+            **({} if active else {
+                "hx-post": f"/deals/{deal_id}/stage", "hx-vals": f'{{"stage": "{s}"}}',
+                "hx-target": "#deal-main", "hx-swap": "innerHTML"})))
+    return Div(*btns, cls="stage-mover")
+
+
+def deal_main(deal_id: int):
+    """The editable body of a deal — returned standalone for HTMX swaps."""
     d = db.deal(deal_id)
     if not d:
-        return _title("Deal not found"), P("No such deal.")
+        return Div(P("No such deal."))
     acts = db.activities_for("deal", deal_id)
     tasks = db.tasks_for("deal", deal_id)
 
     info = Div(
-        Div(H3("Deal"), cls="card-header"),
-        Div(
-            Span("Stage", cls="k"), _pill(d["stage"]),
+        Div(H3("Deal"), Span(f"{d['probability']}% likely", cls="pill"), cls="card-header"),
+        _stage_mover(deal_id, d["stage"]),
+        Div(Span("Stage", cls="k"), _pill(d["stage"]),
             Span("Value", cls="k"), Strong(money(d["deal_value"])),
-            Span("Probability", cls="k"), Span(f"{d['probability']}%"),
             Span("Owner", cls="k"), Span(d["owner_name"] or "—"),
-            Span("Source", cls="k"), Span(d["source"] or "—"),
             Span("Expected close", cls="k"), Span(d["expected_close"] or "—"),
             Span("Next step", cls="k"), Span(d["next_step"] or "—"),
-            cls="kv"),
+            cls="kv", style="margin-top:12px;"),
+        Form(
+            Input(type="number", name="deal_value", value=int(d["deal_value"] or 0),
+                  step="100", style="width:120px;", title="Deal value"),
+            Input(type="text", name="next_step", value=d["next_step"] or "",
+                  placeholder="Next step", style="flex:1;"),
+            Button("Save", cls="btn sm primary", type="submit"),
+            **{"hx-post": f"/deals/{deal_id}/edit", "hx-target": "#deal-main", "hx-swap": "innerHTML"},
+            cls="inline-form", style="margin-top:10px;"),
         cls="card")
 
     contact = Div(
@@ -136,32 +199,49 @@ def deal_detail(deal_id: int):
         Div(Span("Name", cls="k"), Span(_person(d["c_first"], d["c_last"])),
             Span("Title", cls="k"), Span(d["c_title"] or "—"),
             Span("Email", cls="k"), Span(d["c_email"] or "—"),
-            Span("Mobile", cls="k"), Span(d["c_mobile"] or "—"),
             Span("Organization", cls="k"),
             Span(A(d["org_name"], href=d["org_website"], target="_blank") if d["org_website"] else (d["org_name"] or "—")),
             cls="kv"),
         cls="card")
 
-    task_tbl = Table(
-        Thead(Tr(Th("Task"), Th("Priority"), Th("Status"), Th("Due"), Th("Owner"))),
-        Tbody(*[Tr(Td(t["title"]), Td(_pill(t["priority"])), Td(_pill(t["status"])),
-                   Td(t["due_date"] or "—"), Td(t["assignee_name"] or "—"))
-                for t in tasks] or [Tr(Td("No tasks.", colspan="5"))]), cls="tbl")
+    task_rows = [Tr(Td(t["title"]), Td(_pill(t["priority"])),
+                    Td(Select(*[Option(s, value=s, selected=(s == t["status"])) for s in db.TASK_STATUSES],
+                              name="status", cls="mini-select",
+                              **{"hx-post": f"/tasks/{t['id']}/status", "hx-target": "#deal-main",
+                                 "hx-swap": "innerHTML", "hx-trigger": "change"})),
+                    Td(t["due_date"] or "—")) for t in tasks]
+    task_tbl = Table(Thead(Tr(Th("Task"), Th("Priority"), Th("Status"), Th("Due"))),
+                     Tbody(*task_rows or [Tr(Td("No tasks yet.", colspan="4"))]), cls="tbl")
+    add_task = Form(Input(name="title", placeholder="New task…", required=True, style="flex:1;"),
+                    Select(*[Option(p, value=p) for p in db.TASK_PRIORITIES], name="priority"),
+                    Button("Add", cls="btn sm primary", type="submit"),
+                    **{"hx-post": f"/deals/{deal_id}/task", "hx-target": "#deal-main", "hx-swap": "innerHTML"},
+                    cls="inline-form", style="margin-top:10px;")
 
     timeline = Ul(*[Li(
         Div(Span(a["kind"], cls="kind"), " ", Span(a["created"][:16], cls="when")),
         Div(NotStr(a["body"] or "")),
         Div(a["owner_name"] or "—", style="color:var(--text-mute);font-size:11.5px;"),
     ) for a in acts] or [Li("No activity yet.")], cls="timeline")
+    note_form = Form(Input(name="body", placeholder="Log a note…", required=True, style="flex:1;"),
+                     Button("Log", cls="btn sm primary", type="submit"),
+                     **{"hx-post": f"/deals/{deal_id}/note", "hx-target": "#deal-main", "hx-swap": "innerHTML"},
+                     cls="inline-form", style="margin-bottom:12px;")
 
+    return Div(
+        Div(info, Div(Div(H3("Tasks"), cls="card-header"), task_tbl, add_task, cls="card")),
+        Div(contact, Div(Div(H3("Activity"), cls="card-header"), note_form, timeline, cls="card")),
+        cls="detail-grid")
+
+
+def deal_detail(deal_id: int):
+    d = db.deal(deal_id)
+    if not d:
+        return _title("Deal not found"), P("No such deal.")
     return (
         _title(f"{d['org_name']} — {money(d['deal_value'])}",
-               f"Deal #{d['id']} · {d['stage']}", A("← All deals", href="/deals", cls="btn")),
-        Div(
-            Div(info, Div(Div(H3("Tasks"), cls="card-header"), task_tbl, cls="card")),
-            Div(contact,
-                Div(Div(H3("Activity"), cls="card-header"), timeline, cls="card")),
-            cls="detail-grid"),
+               f"Deal #{d['id']}", A("← All deals", href="/deals", cls="btn")),
+        Div(deal_main(deal_id), id="deal-main"),
     )
 
 
@@ -202,8 +282,8 @@ def leads_list(status: str = "All", q: str = ""):
         Input(type="hidden", name="status", value=status),
         cls="toolbar", method="get", action="/leads")
 
-    return (_title("Leads", f"{len(leads)} shown"), seg, search,
-            Div(tbl, cls="card"))
+    return (_title("Leads", f"{len(leads)} shown", A("＋ New lead", href="/leads/new", cls="btn primary")),
+            seg, search, Div(tbl, cls="card"))
 
 
 def lead_detail(lead_id: int):

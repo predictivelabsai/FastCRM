@@ -27,7 +27,7 @@ Upstream analysed: `frappe/crm` (`crm/fcrm/doctype/*`), ~40 doctypes.
 
 Features present upstream and worth adding to the demonstrator next:
 
-1. **Write operations & inline editing** — upstream is fully CRUD; FastCRM is
+1. ✅ **Write operations & inline editing** (done) — upstream is fully CRUD; FastCRM was
    read-only over synthetic data. Add HTMX-driven create/edit for leads, deals,
    tasks, notes (stage drag-and-drop on the Kanban via `hx-post`).
 2. **Custom & saved views** — `CRM View Settings` lets users define filtered,
