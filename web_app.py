@@ -29,7 +29,7 @@ import db
 from web.layout import page, LAYOUT_CSS
 from web import views, ai
 from web.landing import landing_page
-from web import google_auth
+from web import account_auth, google_auth
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger("fastcrm")
@@ -41,6 +41,9 @@ SECRET = os.getenv("FASTCRM_SECRET", secrets.token_hex(32))
 PORT = int(os.getenv("FASTCRM_PORT", "5006"))
 
 app, rt = fast_app(live=False, pico=False, secret_key=SECRET, hdrs=[Style(LAYOUT_CSS)])
+
+
+account_auth.register_fasthtml_routes(rt, app_name="FastCRM", session_key="user", success_path="/")
 
 
 # --- auth helpers -----------------------------------------------------------
@@ -115,6 +118,7 @@ def google_callback(session, request, code: str = "", state: str = "", error: st
     identity = google_auth.exchange(request, code)
     if not identity:
         return RedirectResponse("/login?error=Google+account+is+not+authorised", status_code=303)
+    account_auth.accounts.link_google(identity["email"], identity["name"])
     session["user"] = identity["email"]
     return RedirectResponse("/", status_code=303)
 
