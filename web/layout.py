@@ -231,6 +231,7 @@ NAV_ITEMS = [
     ]),
     ("HELP", [
         ("guide", "User Guide", "📖", "/guide"),
+        ("developers", "Developers", "⌘", "/developers"),
     ]),
 ]
 
