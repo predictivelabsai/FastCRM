@@ -33,6 +33,7 @@ from web.landing import landing_page
 from web.developer import developer_page
 from web import account_auth, google_auth
 from web.api import api
+import byok
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger("fastcrm")
@@ -80,6 +81,15 @@ def _guard(session, active: str, builder):
     if not isinstance(content, tuple):
         content = (content,)
     return page(active, ENV_LABEL, _user(session), _thread(session), *content)
+
+
+# --- BYOK: per-org free-query gate + bring-your-own-key settings -------------
+byok.register(
+    rt, app,
+    app_name="FastCRM",
+    page_builder=lambda session, *c: page("ai", ENV_LABEL, _user(session),
+                                          _thread(session), *c),
+)
 
 
 def _login_card(error: str = "", email: str = ""):
@@ -301,6 +311,7 @@ def get(session):
 @rt("/ai")
 def get(session):
     body = (views._title("AI Assistant", "Chat lives in the right rail. Ask in plain English or use slash-commands."),
+            byok.usage_banner(session),
             Div(NotStr(
                 "<div class='card'><h3>What you can ask</h3>"
                 "<ul style='line-height:1.8;'>"
@@ -361,7 +372,7 @@ async def post(session, message: str = "", thread_id: str = ""):
                 "INSERT INTO chat_messages(thread_id,role,content,created) VALUES(?,?,?,datetime('now'))",
                 (tid, "user", message))
         full = []
-        async for chunk in ai.stream_chat(message):
+        async for chunk in ai.stream_chat(message, session):
             # tee assistant tokens for persistence
             if chunk.startswith("data: "):
                 try:

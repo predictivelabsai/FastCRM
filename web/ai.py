@@ -157,8 +157,14 @@ def handle_command(text: str) -> str | None:
 
 # ---------- streaming chat --------------------------------------------------
 
-async def stream_chat(message: str):
-    """Async generator yielding SSE 'data: {...}' lines."""
+async def stream_chat(message: str, session=None):
+    """Async generator yielding SSE 'data: {...}' lines.
+
+    Free-form chat is routed through the shared BYOK gate: it enforces the
+    per-organization free-query limit and returns a LangChain model backed by
+    either the org's own key or the deployment house key. Slash-commands stay
+    local and are never gated or counted.
+    """
     # Slash-command? Resolve locally and emit as one chunk.
     cmd = handle_command(message)
     if cmd is not None:
@@ -167,9 +173,26 @@ async def stream_chat(message: str):
         return
 
     system = SYSTEM_PROMPT + "\n\n" + crm_snapshot()
+
+    # --- BYOK gate + LangChain routing --------------------------------------
+    import byok
+    gate = byok.begin_query(session)
+    if gate.blocked:
+        yield f"data: {json.dumps({'token': gate.gate_markdown})}\n\n"
+        yield f"data: {json.dumps({'done': True})}\n\n"
+        return
+
     try:
-        async for tok in _provider_stream(system, message):
-            yield f"data: {json.dumps({'token': tok})}\n\n"
+        from langchain_core.messages import HumanMessage, SystemMessage
+        msgs = [SystemMessage(content=system), HumanMessage(content=message)]
+        async for chunk in gate.llm.astream(msgs):
+            tok = chunk.content
+            if isinstance(tok, list):  # some providers stream content blocks
+                tok = "".join(p.get("text", "") if isinstance(p, dict) else str(p)
+                              for p in tok)
+            if tok:
+                yield f"data: {json.dumps({'token': tok})}\n\n"
+        gate.commit()
     except Exception as e:  # noqa: BLE001 — surface to UI
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
     yield f"data: {json.dumps({'done': True})}\n\n"
