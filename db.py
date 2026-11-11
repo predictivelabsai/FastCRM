@@ -228,9 +228,71 @@ CREATE INDEX IF NOT EXISTS idx_chat_thread   ON chat_messages(thread_id);
 """
 
 
+# Columns added after the original schema; applied idempotently on boot so
+# existing databases (e.g. a mounted /data volume) pick them up.
+MIGRATIONS = [
+    ("contacts", "owner_id", "INTEGER REFERENCES users(id)"),
+    ("organizations", "owner_id", "INTEGER REFERENCES users(id)"),
+]
+
+
 def init_schema() -> None:
     with cursor() as conn:
         conn.executescript(SCHEMA)
+        for table, column, decl in MIGRATIONS:
+            have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_contacts_owner ON contacts(owner_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_owner ON organizations(owner_id)")
+
+
+# --- record ownership -------------------------------------------------------
+
+def user_id_for(email: str | None, name: str | None = None, create: bool = True) -> int | None:
+    """CRM ``users`` row for a signed-in identity (created on first use)."""
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    with cursor() as conn:
+        r = conn.execute("SELECT id FROM users WHERE lower(email)=?", (email,)).fetchone()
+        if r:
+            return r[0]
+        if not create:
+            return None
+        return conn.execute("INSERT INTO users(name,email) VALUES (?,?)",
+                            ((name or email.split("@")[0]).strip(), email)).lastrowid
+
+
+def owner_scope(alias: str, owner_id: int | None, include_unowned: bool) -> tuple[str, tuple]:
+    """SQL predicate limiting ``alias`` rows to one owner.
+
+    ``include_unowned`` also shows shared rows with no owner (the synthetic
+    demo data); real deployments run with it off so each user sees only their
+    own contacts and organizations.
+    """
+    if owner_id is None:
+        return ("1=1", ()) if include_unowned else ("1=0", ())
+    if include_unowned:
+        return f"({alias}.owner_id=? OR {alias}.owner_id IS NULL)", (owner_id,)
+    return f"{alias}.owner_id=?", (owner_id,)
+
+
+def backup(dest_dir: str | None = None) -> str:
+    """Consistent online copy of the database (sqlite backup API)."""
+    import time
+    dest = Path(dest_dir or Path(DB_PATH).parent / "backups")
+    dest.mkdir(parents=True, exist_ok=True)
+    target = dest / f"{Path(DB_PATH).stem}-{time.strftime('%Y%m%d-%H%M%S')}.sqlite"
+    src = connect()
+    try:
+        out = sqlite3.connect(str(target))
+        with out:
+            src.backup(out)
+        out.close()
+    finally:
+        src.close()
+    return str(target)
 
 
 # --- read helpers used across views + AI tools ------------------------------

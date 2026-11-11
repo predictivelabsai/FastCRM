@@ -9,6 +9,7 @@ Re-running drops and rebuilds the tables.
 """
 from __future__ import annotations
 
+import os
 import random
 from datetime import datetime, timedelta
 
@@ -74,6 +75,10 @@ def _money(low, high):
 
 
 def build():
+    from web import access
+    if not access.demo_mode() and os.getenv("FASTCRM_FORCE_SEED") != "1":
+        # seeding wipes every table — never on a real (non-demo) deployment
+        raise SystemExit("Refusing to seed synthetic data: DEMO_MODE is off.")
     db.init_schema()
     with db.cursor() as conn:
         for t in ("activities", "call_logs", "tasks", "notes", "deals",

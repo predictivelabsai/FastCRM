@@ -112,13 +112,18 @@ class SQLiteBackend:
         limit: int,
         offset: int,
         query: str | None,
+        scope: tuple[str, tuple] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
-        where = ""
+        conditions: list[str] = []
         params: list[Any] = []
+        if scope:
+            conditions.append(f"({scope[0]})")
+            params.extend(scope[1])
         if query and resource.search_fields:
             clauses = [f'CAST("{field}" AS TEXT) LIKE ?' for field in resource.search_fields]
-            where = " WHERE " + " OR ".join(clauses)
+            conditions.append("(" + " OR ".join(clauses) + ")")
             params.extend([f"%{query}%"] * len(clauses))
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
         with self.connection() as connection:
             total = connection.execute(
                 f'SELECT COUNT(*) FROM "{resource.table}"{where}', params
@@ -130,12 +135,15 @@ class SQLiteBackend:
             ).fetchall()
         return [_serialise_row(row) for row in rows], total
 
-    def get(self, resource: Resource, item_id: str) -> dict[str, Any] | None:
+    def get(
+        self, resource: Resource, item_id: str, scope: tuple[str, tuple] | None = None
+    ) -> dict[str, Any] | None:
         primary_key = self.primary_key(resource)
+        extra, extra_params = (f" AND ({scope[0]})", tuple(scope[1])) if scope else ("", ())
         with self.connection() as connection:
             row = connection.execute(
-                f'SELECT * FROM "{resource.table}" WHERE "{primary_key}"=?',
-                (item_id,),
+                f'SELECT * FROM "{resource.table}" WHERE "{primary_key}"=?{extra}',
+                (item_id, *extra_params),
             ).fetchone()
         return _serialise_row(row) if row else None
 
@@ -284,17 +292,41 @@ def create_sqlite_api(
     base_url: str,
     backend: SQLiteBackend,
     resources: tuple[Resource, ...],
+    read_guard: Callable[[Request], bool] | None = None,
+    row_scope: Callable[[Request, Resource], tuple[str, tuple] | None] | None = None,
+    access_note: str | None = None,
 ) -> FastAPI:
-    """Create the product API and register its typed resource routes."""
+    """Create the product API and register its typed resource routes.
+
+    ``read_guard`` (optional) gates every ``/v1/<resource>`` read; return
+    False to answer 401. ``row_scope`` (optional) returns an extra SQL
+    predicate per request, e.g. to limit rows to the signed-in owner.
+    """
+
+    def require_read(request: Request) -> None:
+        if read_guard is not None and not read_guard(request):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "code": "unauthorized",
+                    "message": "Sign in or send `Authorization: Bearer <token>`.",
+                    "details": {},
+                },
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    def scope_for(request: Request, resource: Resource):
+        return row_scope(request, resource) if row_scope else None
 
     api = FastAPI(
         title=f"{product} API",
         version=version,
         description=(
             f"{description}\n\n"
-            "**Access model:** reads are public. Selected writes are implemented but "
-            "disabled unless the deployment configures `FASTSME_API_TOKEN`; write "
-            "clients then send it as a bearer token."
+            + (access_note or (
+                "**Access model:** reads are public. Selected writes are implemented but "
+                "disabled unless the deployment configures `FASTSME_API_TOKEN`; write "
+                "clients then send it as a bearer token."))
         ),
         docs_url="/docs",
         redoc_url="/redoc",
@@ -353,14 +385,17 @@ def create_sqlite_api(
             summary=f"List {resource.title.lower()}",
             description=resource.description,
             operation_id=f"list_{resource.slug.replace('-', '_')}",
+            dependencies=[Depends(require_read)],
         )
         def list_items(
+            request: Request,
             limit: int = Query(default=50, ge=1, le=200),
             offset: int = Query(default=0, ge=0),
             q: str | None = Query(default=None, description="Case-insensitive text search"),
         ) -> dict[str, Any]:
             rows, total = backend.list(
-                resource, limit=limit, offset=offset, query=q
+                resource, limit=limit, offset=offset, query=q,
+                scope=scope_for(request, resource),
             )
             return {
                 "data": rows,
@@ -374,9 +409,10 @@ def create_sqlite_api(
             tags=[resource.title],
             summary=f"Get one {resource.title.lower()} record",
             operation_id=f"get_{resource.slug.replace('-', '_')}",
+            dependencies=[Depends(require_read)],
         )
-        def get_item(item_id: str) -> dict[str, Any]:
-            row = backend.get(resource, item_id)
+        def get_item(request: Request, item_id: str) -> dict[str, Any]:
+            row = backend.get(resource, item_id, scope=scope_for(request, resource))
             if row is None:
                 raise HTTPException(
                     status_code=404,

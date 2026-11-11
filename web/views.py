@@ -444,11 +444,17 @@ def tasks_list(status: str = "Open"):
 
 # ---------- contacts & orgs -------------------------------------------------
 
-def contacts_list(q: str = ""):
-    clause, params = "", ()
+def _scope(alias, owner_id):
+    from web import access
+    return db.owner_scope(alias, owner_id, include_unowned=access.demo_mode())
+
+
+def contacts_list(q: str = "", owner_id: int | None = None):
+    scope, params = _scope("c", owner_id)
+    clause = f"WHERE {scope}"
     if q:
-        clause = "WHERE c.first_name LIKE ? OR c.last_name LIKE ? OR c.email LIKE ? OR o.name LIKE ?"
-        params = tuple([f"%{q}%"] * 4)
+        clause += " AND (c.first_name LIKE ? OR c.last_name LIKE ? OR c.email LIKE ? OR o.name LIKE ?)"
+        params = params + tuple([f"%{q}%"] * 4)
     contacts = db.rows(
         f"""SELECT c.*, o.name org, o.website FROM contacts c
             LEFT JOIN organizations o ON o.id=c.org_id {clause}
@@ -465,14 +471,16 @@ def contacts_list(q: str = ""):
     return _title("Contacts", f"{len(contacts)} shown"), search, Div(tbl, cls="card")
 
 
-def orgs_list():
+def orgs_list(owner_id: int | None = None):
+    scope, params = _scope("o", owner_id)
     orgs = db.rows(
-        """SELECT o.*, COUNT(DISTINCT c.id) contacts, COUNT(DISTINCT d.id) deals,
+        f"""SELECT o.*, COUNT(DISTINCT c.id) contacts, COUNT(DISTINCT d.id) deals,
                   COALESCE(SUM(CASE WHEN d.stage='Won' THEN d.deal_value END),0) won
            FROM organizations o
            LEFT JOIN contacts c ON c.org_id=o.id
            LEFT JOIN deals d ON d.org_id=o.id
-           GROUP BY o.id ORDER BY won DESC, o.name""")
+           WHERE {scope}
+           GROUP BY o.id ORDER BY won DESC, o.name""", params)
     tbl = Table(
         Thead(Tr(Th("Organization"), Th("Industry"), Th("Size"), Th("Territory"),
                  Th("Contacts"), Th("Deals"), Th("Won"))),

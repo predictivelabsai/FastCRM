@@ -18,6 +18,8 @@ from urllib.request import Request as UrlRequest, urlopen
 from fasthtml.common import *
 from starlette.responses import JSONResponse, RedirectResponse
 
+from web import access
+
 AUTH_CSS = """
 .auth-overlay{position:fixed;inset:0;z-index:1000;background:rgba(17,24,39,.46);display:none;align-items:center;justify-content:center;padding:20px}
 .auth-overlay.visible{display:flex}.auth-dialog{width:min(400px,100%);max-height:calc(100vh - 40px);overflow:auto;background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:24px;box-shadow:0 24px 70px rgba(15,23,42,.22);position:relative}
@@ -348,6 +350,8 @@ def register_fasthtml_routes(rt, *, app_name, session_key=None, success_path="/"
     @rt("/auth/local/register", methods=["POST"])
     async def local_register(request):
         form = await request.form()
+        if not access.may_register(form.get("email")):
+            return JSONResponse({"error": "Registration is closed. Ask an administrator for access."}, status_code=403)
         ok, message = accounts.register(form.get("email"), form.get("password"), form.get("name"))
         return JSONResponse({"message": message}, status_code=200 if ok else 400)
 
@@ -355,6 +359,8 @@ def register_fasthtml_routes(rt, *, app_name, session_key=None, success_path="/"
     async def local_login(request, sess):
         form = await request.form()
         account = accounts.login(form.get("email"), form.get("password"))
+        if account and not access.may_sign_in(account["email"]):
+            account = None
         if not account:
             return JSONResponse({"error": "Invalid email, password, or unverified account."}, status_code=401)
         establish_session(sess, account)
@@ -369,6 +375,8 @@ def register_fasthtml_routes(rt, *, app_name, session_key=None, success_path="/"
     @rt("/auth/local/verify/{token}", methods=["GET"])
     def local_verify(token: str, sess):
         account = accounts.verify(token)
+        if account and not access.may_sign_in(account["email"]):
+            account = None
         if not account:
             return RedirectResponse("/?auth=invalid-verification", status_code=303)
         establish_session(sess, account)
@@ -398,6 +406,8 @@ def register_fastapi_routes(app, *, app_name, session_key=None, success_path="/"
     @app.post("/auth/local/register")
     async def local_register(request):
         form = await request.form()
+        if not access.may_register(form.get("email")):
+            return JSONResponse({"error": "Registration is closed. Ask an administrator for access."}, status_code=403)
         ok, message = accounts.register(form.get("email"), form.get("password"), form.get("name"))
         return JSONResponse({"message": message}, status_code=200 if ok else 400)
 
@@ -405,6 +415,8 @@ def register_fastapi_routes(app, *, app_name, session_key=None, success_path="/"
     async def local_login(request):
         form = await request.form()
         account = accounts.login(form.get("email"), form.get("password"))
+        if account and not access.may_sign_in(account["email"]):
+            account = None
         if not account:
             return JSONResponse({"error": "Invalid email, password, or unverified account."}, status_code=401)
         establish_session(request.session, account)
@@ -419,6 +431,8 @@ def register_fastapi_routes(app, *, app_name, session_key=None, success_path="/"
     @app.get("/auth/local/verify/{token}")
     def local_verify(request, token: str):
         account = accounts.verify(token)
+        if account and not access.may_sign_in(account["email"]):
+            account = None
         if not account:
             return RedirectResponse("/?auth=invalid-verification", status_code=303)
         establish_session(request.session, account)

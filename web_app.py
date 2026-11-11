@@ -7,7 +7,9 @@ AI assistant grounded in the live (synthetic) data.
 Run:
     python web_app.py            # http://localhost:5006
 
-Login: admin@fastcrm.example / FastCRM2026$  (override via .env, see .env.sample)
+Login: admin@fastcrm.example / FastCRM2026$ while DEMO_MODE is on (the default).
+Real deployments set DEMO_MODE=false, ALLOW_SIGNUP=false and ALLOWED_EMAILS
+(see web/access.py and .env.sample).
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fasthtml.common import (
-    fast_app, serve, Div, H1, P, A, Form, Input, Button, Span,
+    fast_app, serve, Beforeware, Div, H1, P, A, Form, Input, Button, Span,
     NotStr, RedirectResponse, Script, Style, Link, Title,
 )
 from starlette.responses import StreamingResponse, Response
@@ -31,7 +33,7 @@ from web.layout import page, LAYOUT_CSS
 from web import views, ai
 from web.landing import landing_page
 from web.developer import developer_page
-from web import account_auth, google_auth
+from web import account_auth, google_auth, access
 from web.api import api
 import byok
 
@@ -44,7 +46,29 @@ ENV_LABEL = os.getenv("FASTCRM_ENV_LABEL", "FastCRM")
 SECRET = os.getenv("FASTCRM_SECRET", secrets.token_hex(32))
 PORT = int(os.getenv("FASTCRM_PORT", "5006"))
 
-app, rt = fast_app(live=False, pico=False, secret_key=SECRET, hdrs=[Style(LAYOUT_CSS)])
+def _gate(req, sess):
+    """Global auth gate: drop sessions the access policy no longer allows and
+    require a session for everything except the public landing/auth/static
+    surface (the /api mount enforces its own token-or-session check)."""
+    user = sess.get("user")
+    if user and not access.may_sign_in(user):
+        sess.pop("user", None)
+        user = None
+    if user and user.lower() == VALID_EMAIL.lower() and not access.demo_mode():
+        sess.pop("user", None)
+        user = None
+    if user:
+        return None
+    if req.method == "GET":
+        return RedirectResponse("/login", status_code=303)
+    return Response("Unauthorized", status_code=401)
+
+
+_PUBLIC = [r"/", r"/login", r"/logout", r"/auth/.*", r"/static/.*", r"/developers",
+           r"/swagger\.json", r"/favicon\.ico", r".*\.(png|jpe?g|gif|svg|webp|ico|css|js|map|woff2?)"]
+
+app, rt = fast_app(live=False, pico=False, secret_key=SECRET, hdrs=[Style(LAYOUT_CSS)],
+                   before=Beforeware(_gate, skip=_PUBLIC))
 app.mount("/api", api)
 
 
@@ -65,6 +89,11 @@ account_auth.register_fasthtml_routes(rt, app_name="FastCRM", session_key="user"
 
 def _user(session) -> str | None:
     return session.get("user")
+
+
+def _owner(session) -> int | None:
+    """CRM users.id of the signed-in identity (contacts/orgs are scoped to it)."""
+    return db.user_id_for(_user(session))
 
 
 def _thread(session) -> str:
@@ -101,7 +130,8 @@ def _login_card(error: str = "", email: str = ""):
             Input(name="password", type="password", placeholder="Password", required=True),
             P(error, cls="error") if error else None,
             Button("Sign in", cls="btn primary", type="submit"),
-            P(NotStr("Demo: <code>admin@fastcrm.example</code> / <code>FastCRM2026$</code>"), cls="hint"),
+            P(NotStr("Demo: <code>admin@fastcrm.example</code> / <code>FastCRM2026$</code>"), cls="hint")
+            if access.demo_mode() else None,
             method="post", action="/login", cls="login-card",
         ),
         cls="login-wrap",
@@ -112,14 +142,18 @@ def _login_card(error: str = "", email: str = ""):
 
 @rt("/login")
 def get(session):
-    if _user(session):
+    if _user(session) and access.may_sign_in(_user(session)):
         return RedirectResponse("/", status_code=303)
+    if not access.demo_mode():
+        # no demo login: sign-in happens in the landing page's account modal
+        return landing_page()
     return _login_card()
 
 
 @rt("/login")
 def post(session, email: str = "", password: str = ""):
-    if email.strip().lower() == VALID_EMAIL.lower() and password == VALID_PASSWORD:
+    if (access.demo_mode() and email.strip().lower() == VALID_EMAIL.lower()
+            and password == VALID_PASSWORD and access.may_sign_in(VALID_EMAIL)):
         session["user"] = email.strip().lower()
         return RedirectResponse("/", status_code=303)
     return _login_card("Invalid email or password.", email)
@@ -140,7 +174,7 @@ def google_callback(session, request, code: str = "", state: str = "", error: st
     if error or not code or state != session.pop("google_oauth_state", None):
         return RedirectResponse("/login?error=Google+sign-in+failed", status_code=303)
     identity = google_auth.exchange(request, code)
-    if not identity:
+    if not identity or not access.may_sign_in(identity["email"]):
         return RedirectResponse("/login?error=Google+account+is+not+authorised", status_code=303)
     account_auth.accounts.link_google(identity["email"], identity["name"])
     session["user"] = identity["email"]
@@ -300,12 +334,12 @@ def get(session, status: str = "Open"):
 
 @rt("/contacts")
 def get(session, q: str = ""):
-    return _guard(session, "contacts", lambda: views.contacts_list(q))
+    return _guard(session, "contacts", lambda: views.contacts_list(q, _owner(session)))
 
 
 @rt("/organizations")
 def get(session):
-    return _guard(session, "organizations", views.orgs_list)
+    return _guard(session, "organizations", lambda: views.orgs_list(_owner(session)))
 
 
 @rt("/ai")
@@ -394,10 +428,11 @@ async def post(session, message: str = "", thread_id: str = ""):
 # --- boot -------------------------------------------------------------------
 
 def _ensure_db():
-    if not db.db_exists():
+    if not db.db_exists() and access.demo_mode():
         logger.info("No database found — seeding synthetic data…")
         import seed
         seed.build()
+    db.init_schema()  # create tables / apply column migrations
 
 
 _ensure_db()
